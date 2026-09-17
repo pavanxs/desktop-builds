@@ -1,0 +1,95 @@
+name: Native beta candidate
+
+# Deliberately inert until the owner enables the variable, grants a read-only
+# source deploy key, and selects an audited source commit. No PR/push triggers.
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Audited private-source commit (40 hexadecimal characters)
+        required: true
+        type: string
+      version:
+        description: Exact beta version (for example 0.1.0-beta.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-beta-candidate
+  cancel-in-progress: false
+
+jobs:
+  native:
+    if: >-
+      github.repository == 'pavanxs/desktop-builds' &&
+      github.actor == 'pavanxs' &&
+      github.triggering_actor == 'pavanxs' &&
+      github.ref == 'refs/heads/main' &&
+      vars.RELEASE_BUILD_ENABLED == 'true'
+    timeout-minutes: 45
+    # This token can stage drafts in THIS builder repository, not read private
+    # source or publish in the separate customer downloads repository.
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - runner: windows-2025
+            platform: win32
+            arch: x64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - runner: macos-15
+            platform: darwin
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      DE_SOURCE_COMMIT: ${{ inputs.source_commit }}
+      DE_RELEASE_VERSION: ${{ inputs.version }}
+      DE_BUILD_PLATFORM: ${{ matrix.platform }}
+      DE_BUILD_ARCH: ${{ matrix.arch }}
+      DE_SOURCE_REPOSITORY: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+    steps:
+      - name: Read reviewed build instructions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: builder
+      - name: Set exact build runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.12.0
+          package-manager-cache: false
+      - name: Validate owner-supplied inputs
+        run: node builder/ci.cjs validate
+      - name: Read the exact private source snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ inputs.source_commit }}
+          ssh-key: ${{ secrets.SOURCE_READ_KEY }}
+          ssh-strict: true
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          path: source
+      - name: Build and check without printing private build output
+        run: node builder/ci.cjs build
+      - name: Stage a private-to-maintainers draft candidate
+        if: success() && vars.DRAFT_UPLOAD_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node builder/ci.cjs draft
+      - name: Remove private source and raw logs
+        if: always()
+        run: node builder/ci.cjs cleanup
+
+# No cache, Actions-artifact upload, customer-repository token, release publish,
+# channel promotion, signing key, or raw log/source upload is configured here.
