@@ -45,7 +45,7 @@ function diagnosticCategories(text) {
 }
 
 function testStages(text) {
-  const allowed = new Set(['fixture-ready', 'first-start', 'first-spawned', 'first-stdout', 'first-stderr', 'first-exit', 'first-close', 'installed', 'restart-verified', 'second-start', 'second-spawned', 'second-stdout', 'second-stderr', 'second-exit', 'second-close', 'recovery-verified', 'helper-enter', 'helper-imported', 'module-enter', 'module-ready', 'before-compression', 'after-compression', 'before-http', 'after-http', 'channel-read', 'archive-copy']);
+  const allowed = new Set(['fixture-ready', 'first-start', 'first-spawned', 'first-stdout', 'first-stderr', 'first-exit', 'first-close', 'installed', 'restart-verified', 'second-start', 'second-spawned', 'second-stdout', 'second-stderr', 'second-exit', 'second-close', 'recovery-verified', 'helper-enter', 'path-resolved', 'helper-imported', 'module-enter', 'module-ready', 'before-compression', 'after-compression', 'before-http', 'after-http', 'channel-read', 'archive-copy']);
   return [...text.matchAll(/^# DE_UPDATE_TEST_STAGE=([a-z-]+)\r?$/gm)].map(match => match[1]).filter(stage => allowed.has(stage)).slice(0, 32);
 }
 
