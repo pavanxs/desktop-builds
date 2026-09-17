@@ -43,13 +43,14 @@ function diagnosticCategories(text) {
 function run(command, args, { cwd, log, env = process.env, label, timeout = 20 * 60000 }) {
   console.log('Starting: ' + label);
   const fd = fs.openSync(log, 'a');
+  const startSize = fs.fstatSync(fd).size;
   try {
     const result = spawnSync(command, args, { cwd, env, stdio: ['ignore', fd, fd], shell: false, windowsHide: true, timeout });
     if (result.status !== 0) {
       console.error('Failed: ' + label);
       const size = fs.fstatSync(fd).size, input = fs.openSync(log, 'r');
       try {
-        const bytes = Buffer.alloc(Math.min(size, 262144));
+        const bytes = Buffer.alloc(Math.min(size - startSize, 262144));
         fs.readSync(input, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
         console.error('Diagnostic categories: ' + (diagnosticCategories(bytes.toString('utf8')).join(', ') || 'unclassified'));
       } finally { fs.closeSync(input); }
@@ -59,7 +60,7 @@ function run(command, args, { cwd, log, env = process.env, label, timeout = 20 *
   } finally { fs.closeSync(fd); }
 }
 
-function build(env = process.env) {
+function prepareBuild(env) {
   const chosen = validate(env), dirs = locations(env);
   if (process.platform !== env.DE_BUILD_PLATFORM || process.arch !== env.DE_BUILD_ARCH) throw new Error('The runner does not match the requested native target.');
   const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dirs.source, encoding: 'utf8', timeout: 5000 });
@@ -78,6 +79,11 @@ function build(env = process.env) {
   const oldPathKey = Object.keys(buildEnv).find(key => key.toLowerCase() === 'path') || 'PATH';
   buildEnv[oldPathKey] = path.join(tools, 'node_modules/.bin') + path.delimiter + (buildEnv[oldPathKey] || '');
   pnpmRun(['install', '--frozen-lockfile'], 'Dependency installation');
+  return { chosen, dirs, log, buildEnv, pnpmRun };
+}
+
+function build(env = process.env) {
+  const { chosen, dirs, log, buildEnv, pnpmRun } = prepareBuild(env);
   // Change only the disposable checkout. Distinct releases must carry distinct
   // application metadata inside ASAR, not merely renamed copies of one archive.
   const applicationFile = path.join(dirs.source, 'apps/desktop/package.json');
@@ -114,6 +120,26 @@ function build(env = process.env) {
   console.log('Native candidate built and launch-checked. No customer release has been published.');
 }
 
+function validateHosted(env = process.env) {
+  const chosen = validate(env), previous = env.DE_PREVIOUS_VERSION || '';
+  if (previous.length > 80 || previous.trim() !== previous || previous === chosen.version || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/.test(previous)) throw new Error('Choose distinct exact baseline and target beta versions.');
+  return { ...chosen, previous };
+}
+
+function hosted(env = process.env) {
+  const chosen = validateHosted(env);
+  const { dirs, log, buildEnv } = prepareBuild(env);
+  const evidence = path.join(dirs.privateWork, 'hosted-update');
+  run(process.execPath, ['tests/hosted-update-smoke.cjs', chosen.previous, chosen.version, evidence], {
+    cwd: dirs.source, log, env: buildEnv, label: 'Real hosted installation and update acceptance', timeout: 20 * 60000,
+  });
+  const report = JSON.parse(fs.readFileSync(path.join(evidence, 'hosted-update-result.json'), 'utf8'));
+  if (report.passed !== true || report.cleaned !== true || report.fromVersion !== chosen.previous || report.toVersion !== chosen.version ||
+      report.platform !== process.platform || report.arch !== process.arch || report.before?.version !== chosen.previous || report.after?.version !== chosen.version ||
+      !/^[a-f0-9]{64}$/.test(report.before?.asarSha256 || '') || !/^[a-f0-9]{64}$/.test(report.after?.asarSha256 || '') || report.before.asarSha256 === report.after.asarSha256) throw new Error('Hosted acceptance did not prove two different native versions.');
+  console.log(`Hosted update passed: ${chosen.target} ${chosen.previous} -> ${chosen.version}. Test files and windows were cleaned up.`);
+}
+
 function draft(env = process.env) {
   const chosen = validate(env), dirs = locations(env);
   if (!env.GH_TOKEN || !/^\d+$/.test(env.GITHUB_RUN_ID || '') || !/^\d+$/.test(env.GITHUB_RUN_ATTEMPT || '')) throw new Error('Draft staging requires the current builder-run token and identity.');
@@ -145,12 +171,12 @@ function cleanup(env = process.env) {
 
 if (require.main === module) {
   try {
-    const action = process.argv[2]; if (process.argv.length !== 3 || !['validate','build','draft','cleanup'].includes(action)) throw new Error('Choose validate, build, draft or cleanup.');
-    ({ validate, build, draft, cleanup })[action]();
+    const action = process.argv[2]; if (process.argv.length !== 3 || !['validate','validate-hosted','build','draft','hosted','cleanup'].includes(action)) throw new Error('Choose a fixed native build or validation action.');
+    ({ validate, 'validate-hosted': validateHosted, build, draft, hosted, cleanup })[action]();
   } catch {
     // JSON/filesystem exceptions can echo private file contents or paths too.
     console.error('Native candidate operation failed. Private source/logs were not published; inspect the reviewed inputs or reproduce locally.');
     process.exitCode = 1;
   }
 }
-module.exports = { validate, locations, diagnosticCategories };
+module.exports = { validate, validateHosted, locations, diagnosticCategories };

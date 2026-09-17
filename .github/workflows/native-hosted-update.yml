@@ -1,0 +1,84 @@
+# Owner-approved checks against already published beta archives.
+# Read-only token; no release publication or metadata changes.
+name: Native hosted update acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Audited private-source commit (40 hexadecimal characters)
+        required: true
+        type: string
+      version:
+        description: Exact beta version (for example 0.1.0-beta.1)
+        required: true
+        type: string
+      previous_version:
+        description: Published baseline beta version
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: native-hosted-update-acceptance
+  cancel-in-progress: false
+jobs:
+  native:
+    if: github.repository == 'pavanxs/desktop-builds' && github.actor == 'pavanxs'
+      && github.triggering_actor == 'pavanxs' && github.ref == 'refs/heads/main'
+      && vars.RELEASE_BUILD_ENABLED == 'true' && vars.HOSTED_UPDATE_TEST_ENABLED
+      == 'true'
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - runner: windows-2025
+            platform: win32
+            arch: x64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - runner: macos-15
+            platform: darwin
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      DE_SOURCE_COMMIT: ${{ inputs.source_commit }}
+      DE_RELEASE_VERSION: ${{ inputs.version }}
+      DE_BUILD_PLATFORM: ${{ matrix.platform }}
+      DE_BUILD_ARCH: ${{ matrix.arch }}
+      DE_SOURCE_REPOSITORY: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+      DE_PREVIOUS_VERSION: ${{ inputs.previous_version }}
+    steps:
+      - name: Read reviewed build instructions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          path: builder
+      - name: Set exact build runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.12.0
+          package-manager-cache: false
+      - name: Validate approved old and new versions
+        run: node builder/ci.cjs validate-hosted
+      - name: Read the exact private source snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ inputs.source_commit }}
+          ssh-key: ${{ secrets.SOURCE_READ_KEY }}
+          ssh-strict: true
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          path: source
+      - name: Test real hosted install and update without exposing private output
+        run: node builder/ci.cjs hosted
+      - name: Remove private source and raw logs
+        if: always()
+        run: node builder/ci.cjs cleanup
