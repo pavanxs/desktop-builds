@@ -24,6 +24,22 @@ function locations(env = process.env) {
   return { workspace, source: path.join(workspace, 'source'), output: path.join(workspace, 'release-output'), privateWork: path.join(path.resolve(env.RUNNER_TEMP), 'design-editor-private-build') };
 }
 
+function diagnosticCategories(text) {
+  // Return fixed categories, never private paths, source text or raw exceptions.
+  return [
+    ['windows-path-length', /Filename too long|ENAMETOOLONG/i],
+    ['missing-path', /\bENOENT\b/],
+    ['disk-space', /\bENOSPC\b/],
+    ['permission', /\b(?:EACCES|EPERM)\b/],
+    ['package-lock-mismatch', /ERR_PNPM_(?:OUTDATED_LOCKFILE|FROZEN_LOCKFILE_WITH_OUTDATED_LOCKFILE|LOCKFILE_CONFIG_MISMATCH)/],
+    ['package-resolution', /ERR_PNPM_(?:NO_MATCHING_VERSION|FETCH_404|FETCH_403|FETCH_401)/],
+    ['missing-dependency', /Cannot find module|ERR_MODULE_NOT_FOUND|ERR_PACKAGE_PATH_NOT_EXPORTED/],
+    ['type-check', /error TS\d+|TS\d+:|TypeScript.*(?:failed|error)/i],
+    ['toolchain-pin-mismatch', /does not match the selected versions|do not match the selected versions|integrity check failed/],
+    ['connection', /ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed/],
+  ].filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
+}
+
 function run(command, args, { cwd, log, env = process.env, label, timeout = 20 * 60000 }) {
   console.log('Starting: ' + label);
   const fd = fs.openSync(log, 'a');
@@ -31,6 +47,12 @@ function run(command, args, { cwd, log, env = process.env, label, timeout = 20 *
     const result = spawnSync(command, args, { cwd, env, stdio: ['ignore', fd, fd], shell: false, windowsHide: true, timeout });
     if (result.status !== 0) {
       console.error('Failed: ' + label);
+      const size = fs.fstatSync(fd).size, input = fs.openSync(log, 'r');
+      try {
+        const bytes = Buffer.alloc(Math.min(size, 262144));
+        fs.readSync(input, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+        console.error('Diagnostic categories: ' + (diagnosticCategories(bytes.toString('utf8')).join(', ') || 'unclassified'));
+      } finally { fs.closeSync(input); }
       throw new Error(`${label} failed. Raw output was kept only in the temporary private workspace, not uploaded.`);
     }
     console.log('Passed: ' + label);
@@ -63,9 +85,13 @@ function build(env = process.env) {
   application.version = chosen.version;
   fs.writeFileSync(applicationFile, JSON.stringify(application, null, 2) + '\n');
   console.log('The disposable build checkout has the requested release version.');
-  // The normal package command prepares generated integrations/tooling before
-  // validation; failed checks still prevent any candidate upload.
-  pnpmRun(['package'], 'Native packaging');
+  // Preserve the root package stages but report each failing boundary separately.
+  run(process.execPath, ['--input-type=module', '-e', "import {checkUpstream} from './scripts/build/t3-dependencies.mjs'; await checkUpstream({obtain:true});"], { cwd: dirs.source, log, env: buildEnv, label: 'Pinned upstream checkout' });
+  run(process.execPath, ['scripts/build/t3-toolchain.mjs'], { cwd: dirs.source, log, env: buildEnv, label: 'Pinned agent toolchain' });
+  run(process.execPath, ['scripts/build/t3-dependencies.mjs'], { cwd: dirs.source, log, env: buildEnv, label: 'Pinned agent dependencies' });
+  run(process.execPath, ['scripts/build/t3-prepare.mjs'], { cwd: dirs.source, log, env: buildEnv, label: 'Agent bundle and validation' });
+  pnpmRun(['preview:stage'], 'Component runtime staging');
+  pnpmRun(['--filter', 'desktop', 'package'], 'Native packaging');
   pnpmRun(['typecheck'], 'Type checking'); pnpmRun(['lint'], 'Desktop lint');
   const tests = fs.readdirSync(path.join(dirs.source, 'packages/launcher/test')).filter(name => name.endsWith('.test.cjs')).map(name => 'packages/launcher/test/' + name);
   tests.push('tests/desktop-updates.test.cjs', 'tests/desktop-update-service.test.cjs', 'tests/desktop-update-windows.test.cjs', 'tests/desktop-update-mac.test.cjs', 'tests/window-close.test.cjs');
@@ -127,4 +153,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }
 }
-module.exports = { validate, locations };
+module.exports = { validate, locations, diagnosticCategories };
