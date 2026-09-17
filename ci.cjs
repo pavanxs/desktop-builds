@@ -37,6 +37,10 @@ function diagnosticCategories(text) {
     ['type-check', /error TS\d+|TS\d+:|TypeScript.*(?:failed|error)/i],
     ['toolchain-pin-mismatch', /does not match the selected versions|do not match the selected versions|integrity check failed/],
     ['connection', /ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed/],
+    ['offline-package-missing', /ERR_PNPM_NO_OFFLINE_(?:TARBALL|META)/],
+    ['preview-linked-files', /Portable preview staging must not contain links/],
+    ['test-assertion', /ERR_ASSERTION|AssertionError/],
+    ['test-timeout', /testTimeoutFailure|test timed out|Test timed out/],
   ].filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
 }
 
@@ -52,7 +56,12 @@ function run(command, args, { cwd, log, env = process.env, label, timeout = 20 *
       try {
         const bytes = Buffer.alloc(Math.min(size - startSize, 262144));
         fs.readSync(input, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
-        console.error('Diagnostic categories: ' + (diagnosticCategories(bytes.toString('utf8')).join(', ') || 'unclassified'));
+        const text = bytes.toString('utf8');
+        console.error('Diagnostic categories: ' + (diagnosticCategories(text).join(', ') || 'unclassified'));
+        // Test numbers locate a failure in the private checkout without exposing
+        // its test names, paths, assertions or exception values to public logs.
+        const failedChecks = [...text.matchAll(/^not ok ([0-9]{1,4}) - /gm)].slice(0, 50).map(match => match[1]);
+        if (failedChecks.length) console.error('Failed check numbers: ' + failedChecks.join(', '));
       } finally { fs.closeSync(input); }
       throw new Error(`${label} failed. Raw output was kept only in the temporary private workspace, not uploaded.`);
     }
@@ -101,7 +110,9 @@ function build(env = process.env) {
   pnpmRun(['typecheck'], 'Type checking'); pnpmRun(['lint'], 'Desktop lint');
   const tests = fs.readdirSync(path.join(dirs.source, 'packages/launcher/test')).filter(name => name.endsWith('.test.cjs')).map(name => 'packages/launcher/test/' + name);
   tests.push('tests/desktop-updates.test.cjs', 'tests/desktop-update-service.test.cjs', 'tests/desktop-update-windows.test.cjs', 'tests/desktop-update-mac.test.cjs', 'tests/window-close.test.cjs');
-  run(process.execPath, ['--test', '--test-concurrency=1', ...tests], { cwd: dirs.source, log, env: buildEnv, label: 'Release regression tests' });
+  for (const [index, file] of tests.entries()) {
+    run(process.execPath, ['--test', '--test-reporter=tap', '--test-concurrency=1', file], { cwd: dirs.source, log, env: buildEnv, label: 'Release regression group ' + (index + 1) });
+  }
   pnpmRun(['cli:stage'], 'Payload staging');
   const desktop = JSON.parse(fs.readFileSync(path.join(dirs.source, 'apps/desktop/package.json'), 'utf8'));
   const nativeDirectory = path.join(dirs.source, 'apps/desktop/out', `${desktop.productName || desktop.name}-${process.platform}-${process.arch}`);
