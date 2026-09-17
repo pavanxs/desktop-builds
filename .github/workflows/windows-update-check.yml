@@ -1,0 +1,59 @@
+# Read-only Windows updater diagnosis; no app build, upload or public release.
+name: Windows updater regression
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Audited private-source commit (40 hexadecimal characters)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: windows-updater-regression
+  cancel-in-progress: false
+jobs:
+  native:
+    if: github.repository == 'pavanxs/desktop-builds' && github.actor == 'pavanxs'
+      && github.triggering_actor == 'pavanxs' && github.ref == 'refs/heads/main'
+      && vars.RELEASE_BUILD_ENABLED == 'true'
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    runs-on: windows-2025
+    env:
+      DE_SOURCE_COMMIT: ${{ inputs.source_commit }}
+      DE_RELEASE_VERSION: 0.1.0-beta.1
+      DE_BUILD_PLATFORM: win32
+      DE_BUILD_ARCH: x64
+      DE_SOURCE_REPOSITORY: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+    steps:
+      - name: Read reviewed build instructions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          path: builder
+      - name: Set exact build runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.12.0
+          package-manager-cache: false
+      - name: Validate owner-supplied inputs
+        run: node builder/ci.cjs validate
+      - name: Read the exact private source snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ inputs.source_commit }}
+          ssh-key: ${{ secrets.SOURCE_READ_KEY }}
+          ssh-strict: true
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          path: source
+      - name: Check the Windows updater without publishing raw test output
+        run: node builder/ci.cjs windows-check
+      - name: Remove private source and raw logs
+        if: always()
+        run: node builder/ci.cjs cleanup

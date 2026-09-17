@@ -44,6 +44,11 @@ function diagnosticCategories(text) {
   ].filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
 }
 
+function testStages(text) {
+  const allowed = new Set(['fixture-ready', 'first-start', 'first-spawned', 'first-stdout', 'first-stderr', 'first-exit', 'first-close', 'installed', 'restart-verified', 'second-start', 'second-spawned', 'second-stdout', 'second-stderr', 'second-exit', 'second-close', 'recovery-verified', 'channel-read', 'archive-copy']);
+  return [...text.matchAll(/^# DE_UPDATE_TEST_STAGE=([a-z-]+)\r?$/gm)].map(match => match[1]).filter(stage => allowed.has(stage)).slice(0, 32);
+}
+
 function run(command, args, { cwd, log, env = process.env, label, timeout = 20 * 60000 }) {
   console.log('Starting: ' + label);
   const fd = fs.openSync(log, 'a');
@@ -62,6 +67,8 @@ function run(command, args, { cwd, log, env = process.env, label, timeout = 20 *
         // its test names, paths, assertions or exception values to public logs.
         const failedChecks = [...text.matchAll(/^not ok ([0-9]{1,4}) - /gm)].slice(0, 50).map(match => match[1]);
         if (failedChecks.length) console.error('Failed check numbers: ' + failedChecks.join(', '));
+        const stages = testStages(text);
+        if (stages.length) console.error('Observed helper stages: ' + stages.join(', '));
       } finally { fs.closeSync(input); }
       throw new Error(`${label} failed. Raw output was kept only in the temporary private workspace, not uploaded.`);
     }
@@ -137,6 +144,14 @@ function validateHosted(env = process.env) {
   return { ...chosen, previous };
 }
 
+function windowsCheck(env = process.env) {
+  if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('This check requires native Windows x64.');
+  const { dirs, log, buildEnv } = prepareBuild(env);
+  run(process.execPath, ['--test', '--test-reporter=tap', 'tests/desktop-update-windows.test.cjs'], {
+    cwd: dirs.source, log, env: buildEnv, label: 'Windows installed helper regression', timeout: 180000,
+  });
+}
+
 function hosted(env = process.env) {
   const chosen = validateHosted(env);
   const { dirs, log, buildEnv } = prepareBuild(env);
@@ -182,12 +197,12 @@ function cleanup(env = process.env) {
 
 if (require.main === module) {
   try {
-    const action = process.argv[2]; if (process.argv.length !== 3 || !['validate','validate-hosted','build','draft','hosted','cleanup'].includes(action)) throw new Error('Choose a fixed native build or validation action.');
-    ({ validate, 'validate-hosted': validateHosted, build, draft, hosted, cleanup })[action]();
+    const action = process.argv[2]; if (process.argv.length !== 3 || !['validate','validate-hosted','build','draft','hosted','windows-check','cleanup'].includes(action)) throw new Error('Choose a fixed native build or validation action.');
+    ({ validate, 'validate-hosted': validateHosted, build, draft, hosted, 'windows-check': windowsCheck, cleanup })[action]();
   } catch {
     // JSON/filesystem exceptions can echo private file contents or paths too.
     console.error('Native candidate operation failed. Private source/logs were not published; inspect the reviewed inputs or reproduce locally.');
     process.exitCode = 1;
   }
 }
-module.exports = { validate, validateHosted, locations, diagnosticCategories };
+module.exports = { validate, validateHosted, locations, diagnosticCategories, testStages };
