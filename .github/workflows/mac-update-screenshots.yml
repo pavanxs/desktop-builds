@@ -1,0 +1,88 @@
+name: Mac update screenshots
+run-name: Mac beta.2 to beta.3 update screenshots
+
+# Reuse the audited hosted update test; only sample screenshots and a bounded
+# result leave the runner. Application releases and source stay unchanged.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mac-update-screenshots
+  cancel-in-progress: false
+jobs:
+  native:
+    if: >-
+      github.repository == 'pavanxs/desktop-builds' &&
+      github.actor == 'pavanxs' && github.triggering_actor == 'pavanxs' &&
+      github.ref == 'refs/heads/main' && vars.RELEASE_BUILD_ENABLED == 'true' &&
+      vars.HOSTED_UPDATE_TEST_ENABLED == 'true'
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      DE_SOURCE_COMMIT: 0e0ff94459629736e1f8be20e98156b6f804ac4d
+      DE_SOURCE_REPOSITORY: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+      DE_PREVIOUS_VERSION: 0.1.0-beta.2
+      DE_RELEASE_VERSION: 0.1.0-beta.3
+      DE_BUILD_PLATFORM: darwin
+      DE_BUILD_ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Read the public test instructions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: builder
+          persist-credentials: false
+      - name: Set the test runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.12.0
+          package-manager-cache: false
+      - name: Validate the fixed test scope
+        run: |
+          node builder/ci.cjs validate-hosted
+          node builder/export-mac-update-screenshots.cjs validate
+      - name: Read the exact audited test source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: 0e0ff94459629736e1f8be20e98156b6f804ac4d
+          ssh-key: ${{ secrets.SOURCE_READ_KEY }}
+          ssh-strict: true
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          path: source
+      - name: Run the unchanged real update, restart and terminal checks
+        id: acceptance
+        run: node builder/ci.cjs hosted
+      - name: Keep only the three sample screenshots and safe result fields
+        if: always()
+        env:
+          DE_ACCEPTANCE_OUTCOME: ${{ steps.acceptance.outcome }}
+        run: node builder/export-mac-update-screenshots.cjs collect
+      - name: Remove private source and raw test logs
+        if: always()
+        run: node builder/ci.cjs cleanup
+      - name: Upload before, ready and after screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mac-update-${{ matrix.arch }}-beta2-to-beta3
+          path: |
+            ${{ runner.temp }}/de-mac-update-visual-evidence/hosted-before.png
+            ${{ runner.temp }}/de-mac-update-visual-evidence/hosted-ready.png
+            ${{ runner.temp }}/de-mac-update-visual-evidence/hosted-after.png
+            ${{ runner.temp }}/de-mac-update-visual-evidence/result.json
+          if-no-files-found: error
+          retention-days: 7
+          include-hidden-files: false
