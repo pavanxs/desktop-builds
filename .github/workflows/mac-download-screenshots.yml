@@ -1,0 +1,60 @@
+name: Mac download screenshots
+
+# Test only the public download. No private source, provider account or release writes.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Reviewed public beta version
+        required: true
+        default: 0.1.0-beta.3
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: mac-download-screenshots
+  cancel-in-progress: false
+jobs:
+  screenshot:
+    if: >-
+      github.repository == 'pavanxs/desktop-builds' &&
+      github.actor == 'pavanxs' && github.triggering_actor == 'pavanxs' &&
+      github.ref == 'refs/heads/main' && vars.HOSTED_UPDATE_TEST_ENABLED == 'true'
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      DE_SCREENSHOT_VERSION: ${{ inputs.version }}
+      DE_SCREENSHOT_ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Read the public screenshot test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: builder
+          persist-credentials: false
+      - name: Set the test runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.12.0
+          package-manager-cache: false
+      - name: Install the public app, use its native window and take screenshots
+        run: node builder/mac-download-screenshots.cjs
+      - name: Retain only screenshots and the bounded test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mac-download-${{ matrix.arch }}-${{ inputs.version }}
+          path: |
+            ${{ runner.temp }}/de-mac-visual-evidence/*.png
+            ${{ runner.temp }}/de-mac-visual-evidence/result.json
+          if-no-files-found: error
+          retention-days: 7
+          include-hidden-files: false
