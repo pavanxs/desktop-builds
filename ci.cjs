@@ -40,12 +40,13 @@ function diagnosticCategories(text) {
     ['offline-package-missing', /ERR_PNPM_NO_OFFLINE_(?:TARBALL|META)/],
     ['preview-linked-files', /Portable preview staging must not contain links/],
     ['test-assertion', /ERR_ASSERTION|AssertionError/],
-    ['test-timeout', /testTimeoutFailure|test timed out|Test timed out/],
+    ['test-timeout', /testTimeoutFailure|test timed out|Test timed out|Timed out:/],
   ].filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
 }
 
 function testStages(text) {
   const allowed = new Set(['fixture-ready', 'first-start', 'first-spawned', 'first-stdout', 'first-stderr', 'first-exit', 'first-close', 'installed', 'restart-verified', 'second-start', 'second-spawned', 'second-stdout', 'second-stderr', 'second-exit', 'second-close', 'recovery-verified', 'helper-enter', 'path-resolved', 'helper-imported', 'module-enter', 'module-ready', 'before-compression', 'after-compression', 'before-http', 'after-http', 'channel-read', 'archive-copy']);
+  for (const stage of ['metadata-start','metadata-verified','baseline-installed','window-ready','update-requested','update-downloaded','work-guard-verified','restart-ready','restarted','terminal-updated']) allowed.add(stage);
   return [...text.matchAll(/^# DE_UPDATE_TEST_STAGE=([a-z-]+)\r?$/gm)].map(match => match[1]).filter(stage => allowed.has(stage)).slice(0, 32);
 }
 
