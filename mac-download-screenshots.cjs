@@ -89,7 +89,7 @@ async function main() {
     runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, testCommit: process.env.GITHUB_SHA,
     passed: false, stage: 'environment', checks: [], screenshots: [], modelCalled: false, privateSourceRead: false,
     limitations: 'Cloud macOS app/download proof using a small source-only sample project; not a live model, real page-runtime or universal Gatekeeper certification.' };
-  let child, c, normalPid, executable, bundle, backendOrigin, rawLog = '';
+  let child, c, normalPid, executable, backendOrigin, rawLog = '';
   const execOwn = (cmd, args, options = {}) => exec(cmd, args, { cwd: work, env, timeout: 30000, maxBuffer: 65536, ...options });
   async function pids() {
     const { stdout } = await execOwn('/bin/ps', ['-axww', '-o', 'pid=,comm=']);
@@ -108,9 +108,8 @@ async function main() {
     report.screenshots.push({ file: name + '.png', method, ...pngSize(bytes), bytes: bytes.length, sha256: digest(bytes) });
   }
   async function desktopShot(name) {
-    // An ordinary activation request. Never changes Screen Recording permissions.
-    try { await execOwn('/usr/bin/osascript', ['-e', `tell application ${JSON.stringify(bundle)} to activate`], { timeout: 10000 }); }
-    catch { report.activationRequestFailed = true; }
+    // Use the existing visible window. Launch Services activation can launch a
+    // second copy of a directly spawned app; no AppleScript or TCC changes here.
     await delay(1500);
     try { await capture(name, 'macOS desktop'); }
     catch { report.desktopCaptureUnavailable = true; }
@@ -155,10 +154,14 @@ async function main() {
     };
     for (const [file, text] of Object.entries(sourceFiles)) { await fs.mkdir(path.dirname(path.join(project, file)), { recursive: true }); await fs.writeFile(path.join(project, file), text, { flag: 'wx' }); }
     executable = path.join(directory, current.executable);
-    bundle = executable.slice(0, executable.indexOf('.app/Contents/MacOS/') + 4);
     report.stage = 'normal command launch';
     await execOwn('/bin/bash', [command, project], { timeout: 300000 });
     normalPid = await until(async () => (await pids())[0]);
+    // Process creation precedes renderer startup. This screenshot is visually
+    // reviewed; the second launch below also asserts actual interactive UI state.
+    await delay(15000);
+    assert.ok((await pids()).includes(normalPid));
+    report.normalLaunchCaptureDelayMs = 15000;
     await desktopShot('mac-desktop-normal-launch');
     await stopPid(normalPid); normalPid = null;
     report.checks.push('The installed design-editor command starts the downloaded native Mac executable');
@@ -220,13 +223,20 @@ async function main() {
   } finally {
     if (c) { await c.evaluate('window.agent?.disconnect()').catch(() => {}); c.close(); }
     try {
+      report.cleanupStep = 'stop normal process';
       if (normalPid) await stopPid(normalPid);
+      report.cleanupStep = 'stop inspected process';
       if (child?.pid && child.exitCode === null) await stopPid(child.pid);
+      report.cleanupStep = 'stop remaining owned instances';
+      if (executable) for (const pid of await pids()) await stopPid(pid);
       if (executable) assert.equal((await pids()).length, 0);
+      report.cleanupStep = 'backend port';
       if (backendOrigin) await until(async () => { try { await fetch(backendOrigin + '/.well-known/t3/environment', { signal: AbortSignal.timeout(1000) }); return false; } catch { return true; } });
+      report.cleanupStep = 'remove owned test home';
       assert.equal(await fs.readFile(path.join(work, '.owned-mac-screenshot-test'), 'utf8'), 'public-download-only');
       await fs.rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
       report.cleaned = true;
+      report.cleanupStep = 'complete';
     } catch { report.cleaned = false; report.passed = false; process.exitCode = 1; }
     report.finishedAt = new Date().toISOString();
     await fs.writeFile(path.join(output, 'result.json'), JSON.stringify(report, null, 2) + '\n');
