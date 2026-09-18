@@ -148,7 +148,7 @@ function validateHosted(env = process.env) {
 function windowsCheck(env = process.env) {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('This check requires native Windows x64.');
   const { dirs, log, buildEnv } = prepareBuild(env);
-  run(process.execPath, ['--test', '--test-reporter=tap', 'tests/desktop-update-windows.test.cjs'], {
+  run(process.execPath, ['--test', '--test-reporter=tap', 'tests/desktop-update-windows.test.cjs', 'packages/launcher/test/release-windows-architecture.test.cjs'], {
     cwd: dirs.source, log, env: buildEnv, label: 'Windows installed helper regression', timeout: 180000,
   });
 }
@@ -172,7 +172,7 @@ function hosted(env = process.env) {
   const bootstrap = JSON.parse(fs.readFileSync(path.join(bootstrapEvidence, 'bootstrap-result.json'), 'utf8'));
   if (bootstrap.passed !== true || bootstrap.cleaned !== true || bootstrap.version !== chosen.version || bootstrap.platform !== process.platform || bootstrap.arch !== process.arch ||
       bootstrap.registeredCommand !== true || bootstrap.repeatInstallation !== true || bootstrap.nativeLaunch !== true || bootstrap.asarSha256 !== report.after.asarSha256 ||
-      (process.platform === 'win32' && bootstrap.runnerUserPathRestored !== true) || (process.platform === 'darwin' && bootstrap.profileRegistration !== true)) throw new Error('Public installer acceptance did not complete.');
+      (process.platform === 'win32' && (bootstrap.runnerUserPathRestored !== true || bootstrap.pipedInvocation !== true || bootstrap.interactiveTypeCollision !== true)) || (process.platform === 'darwin' && bootstrap.profileRegistration !== true)) throw new Error('Public installer acceptance did not complete.');
   console.log(`Public installer passed: ${chosen.target} ${chosen.version}. Command registration, repeat installation and native launch passed; owned test state was cleaned.`);
 }
 
