@@ -46,7 +46,7 @@ function diagnosticCategories(text) {
 
 function testStages(text) {
   const allowed = new Set(['fixture-ready', 'first-start', 'first-spawned', 'first-stdout', 'first-stderr', 'first-exit', 'first-close', 'installed', 'restart-verified', 'second-start', 'second-spawned', 'second-stdout', 'second-stderr', 'second-exit', 'second-close', 'recovery-verified', 'helper-enter', 'path-resolved', 'helper-imported', 'module-enter', 'module-ready', 'before-compression', 'after-compression', 'before-http', 'after-http', 'channel-read', 'archive-copy']);
-  for (const stage of ['metadata-start','metadata-verified','baseline-installed','window-ready','update-requested','update-downloaded','work-guard-verified','restart-ready','restarted','terminal-updated']) allowed.add(stage);
+  for (const stage of ['metadata-start','metadata-verified','baseline-installed','window-ready','update-requested','update-downloaded','work-guard-verified','restart-ready','restarted','terminal-updated','bootstrap-start','bootstrap-installed','bootstrap-verified']) allowed.add(stage);
   return [...text.matchAll(/^# DE_UPDATE_TEST_STAGE=([a-z-]+)\r?$/gm)].map(match => match[1]).filter(stage => allowed.has(stage)).slice(0, 32);
 }
 
@@ -165,6 +165,15 @@ function hosted(env = process.env) {
       report.platform !== process.platform || report.arch !== process.arch || report.before?.version !== chosen.previous || report.after?.version !== chosen.version ||
       !/^[a-f0-9]{64}$/.test(report.before?.asarSha256 || '') || !/^[a-f0-9]{64}$/.test(report.after?.asarSha256 || '') || report.before.asarSha256 === report.after.asarSha256) throw new Error('Hosted acceptance did not prove two different native versions.');
   console.log(`Hosted update passed: ${chosen.target} ${chosen.previous} -> ${chosen.version}. Test files and windows were cleaned up.`);
+  const bootstrapEvidence = path.join(dirs.privateWork, 'public-bootstrap');
+  run(process.execPath, ['tests/hosted-bootstrap-smoke.cjs', chosen.version, bootstrapEvidence], {
+    cwd: dirs.source, log, env: buildEnv, label: 'Exact public installer and command registration', timeout: 15 * 60000,
+  });
+  const bootstrap = JSON.parse(fs.readFileSync(path.join(bootstrapEvidence, 'bootstrap-result.json'), 'utf8'));
+  if (bootstrap.passed !== true || bootstrap.cleaned !== true || bootstrap.version !== chosen.version || bootstrap.platform !== process.platform || bootstrap.arch !== process.arch ||
+      bootstrap.registeredCommand !== true || bootstrap.repeatInstallation !== true || bootstrap.nativeLaunch !== true || bootstrap.asarSha256 !== report.after.asarSha256 ||
+      (process.platform === 'win32' && bootstrap.runnerUserPathRestored !== true) || (process.platform === 'darwin' && bootstrap.profileRegistration !== true)) throw new Error('Public installer acceptance did not complete.');
+  console.log(`Public installer passed: ${chosen.target} ${chosen.version}. Command registration, repeat installation and native launch passed; owned test state was cleaned.`);
 }
 
 function draft(env = process.env) {
